@@ -393,7 +393,7 @@ abstract contract Trading is IFees, ITrading, IHashing, IRegistry, ISignatures, 
         uint256 amount,
         SignatureType signatureType
     ) internal {
-        if (signatureType == SignatureType.EOA && tokenId > 0) {
+        if (tokenId > 0) {
             bytes32 marketId = getMarketId(tokenId);
             _approveBatch(user, marketId, tokenId, amount);
         }
