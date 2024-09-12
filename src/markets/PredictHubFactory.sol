@@ -31,7 +31,8 @@ contract PredictHubFactory is Initializable, IUmaFactory {
 
     mapping(bytes32 => uint[]) public payoutNumerators; // Name of the unresolvable outcome where payouts are split.
     mapping(bytes32 => uint) public payoutDenominator;
-
+    mapping(address => uint256) public whitelisted;
+    uint256 public feeConfig;
     event MarketInitialized(
         bytes32 indexed marketId,
         bytes32 indexed questionId,
@@ -55,6 +56,7 @@ contract PredictHubFactory is Initializable, IUmaFactory {
         uint256 outcome1Tokens,
         uint256 outcome2Tokens
     );
+
     /// @dev Emitted when a position is successfully split.
     event PositionSplited(address indexed holder, bytes32 indexed marketId, uint[] partition, uint amount);
     /// @dev Emitted when positions are successfully merged.
@@ -62,6 +64,8 @@ contract PredictHubFactory is Initializable, IUmaFactory {
 
     event PayoutRedemption(address indexed redeemer, bytes32 indexed marketId, uint[] indexSets, uint payout);
     event AddressUpdated(string name, address value);
+    event FeeUpdated(address, uint96);
+    event WhitelistUpdated(address[] users, uint256[] status);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -84,6 +88,13 @@ contract PredictHubFactory is Initializable, IUmaFactory {
         _;
     }
 
+    modifier onlyAdapter() {
+        if (msg.sender != address(umaAdapter)) {
+            revert Errors.NotAuthorized();
+        }
+        _;
+    }
+
     function changeOwner(address _newOwner) external onlyOwner {
         _owner = _newOwner;
         emit AddressUpdated("changeOwner", _newOwner);
@@ -97,6 +108,45 @@ contract PredictHubFactory is Initializable, IUmaFactory {
     function changeAdapter(IUmaAdapter _umaAdapter) external onlyOwner {
         umaAdapter = _umaAdapter;
         emit AddressUpdated("changeAdapter", address(_umaAdapter));
+    }
+
+    /// @dev Explain to a developer any extra details
+    /// @param _feeManager address of fee manager
+    /// @param _feeRate fee rate base on 1e10
+    function updateFeeConfig(address _feeManager, uint96 _feeRate) external onlyOwner {
+        feeConfig = (uint256(uint160(_feeManager)) << 96) | uint256(_feeRate);
+        emit FeeUpdated(_feeManager, _feeRate);
+    }
+
+    function configWhitelist(address[] calldata _users, uint256[] calldata _status) external onlyOwner {
+        assembly {
+            let slot := whitelisted.slot
+            let len := _users.length
+            let userOffset := _users.offset // Point to the beginning of the array data
+            let statusOffset := _status.offset // Point to the beginning of the array data
+            let i := 0
+
+            // Start of loop
+            for {
+
+            } lt(i, len) {
+
+            } {
+                // Load _referers[i] and _rewards[i] from calldata
+                let user := calldataload(add(userOffset, mul(i, 32)))
+                let status := calldataload(add(statusOffset, mul(i, 32)))
+
+                // Store reward in rewards mapping
+                mstore(0, user)
+                mstore(32, slot)
+                let hash := keccak256(0, 64)
+                sstore(hash, status)
+                // Increment i
+                i := add(i, 1)
+            }
+            // End of loop
+        }
+        emit WhitelistUpdated(_users, _status);
     }
 
     function initializeMarket(
@@ -160,8 +210,10 @@ contract PredictHubFactory is Initializable, IUmaFactory {
     // Callback from settled assertion.
     // If the assertion was resolved true, then the asserter gets the reward and the market is marked as resolved.
     // Otherwise, assertedOutcomeId is reset and the market can be asserted again.
-    function assertionResolvedAdapterCallback(bytes32 assertionId, bool assertedTruthfully) public override {
-        if (msg.sender != address(umaAdapter)) revert Errors.NotAuthorized();
+    function assertionResolvedAdapterCallback(
+        bytes32 assertionId,
+        bool assertedTruthfully
+    ) public override onlyAdapter {
         bytes32 marketId = assertedMarkets[assertionId].marketId;
         Market storage market = markets[marketId];
         if (market.resolved) {
@@ -190,10 +242,7 @@ contract PredictHubFactory is Initializable, IUmaFactory {
         bytes32 assertionId,
         string memory assertedOutcome,
         address asserter
-    ) external override {
-        if (msg.sender != address(umaAdapter)) {
-            revert Errors.NotAuthorized();
-        }
+    ) external override onlyAdapter {
         markets[marketId].outCome.assertedOutcomeId = keccak256(bytes(assertedOutcome));
         assertedMarkets[assertionId] = AssertedMarket({ asserter: asserter, marketId: marketId });
         emit MarketAsserted(marketId, assertedOutcome, assertionId);
@@ -236,12 +285,6 @@ contract PredictHubFactory is Initializable, IUmaFactory {
         return markets[marketId];
     }
 
-    function getAssertedMarket(
-        bytes32 assertionId
-    ) external view override returns (AssertedMarket memory assertedMarket) {
-        return assertedMarkets[assertionId];
-    }
-
     function redeemPositions(bytes32 marketId, uint256[] calldata indexSets) external {
         uint den = payoutDenominator[marketId];
         if (den == 0) {
@@ -282,6 +325,12 @@ contract PredictHubFactory is Initializable, IUmaFactory {
         }
 
         if (totalPayout > 0) {
+            (address feeManager, uint96 feeRate) = getFeeConfig();
+            if (feeRate > 0 && whitelisted[msg.sender] == 0) {
+                uint256 fee = (totalPayout * feeRate) / _PRECISION;
+                currency.safeTransfer(feeManager, fee);
+                totalPayout -= fee;
+            }
             currency.safeTransfer(msg.sender, totalPayout);
         }
         emit PayoutRedemption(msg.sender, marketId, indexSets, totalPayout);
@@ -383,12 +432,8 @@ contract PredictHubFactory is Initializable, IUmaFactory {
         uint8 decimals = IERC20Ext(address(currency)).decimals();
         outcome1Token = new ExpandedERC20(tokenName1, tokenName1, decimals);
         outcome2Token = new ExpandedERC20(tokenName2, tokenName2, decimals);
-        outcome1Token.addMinter(address(this));
-        outcome2Token.addMinter(address(this));
-        outcome1Token.addBurner(address(this));
-        outcome2Token.addBurner(address(this));
-        outcome1Token.addApprover(address(this));
-        outcome2Token.addApprover(address(this));
+        outcome1Token.addRoles(address(this));
+        outcome2Token.addRoles(address(this));
         outCome = OutCome({
             assertedOutcomeId: bytes32(0),
             outcome1Token: outcome1Token,
@@ -432,5 +477,9 @@ contract PredictHubFactory is Initializable, IUmaFactory {
 
     function getTokens(bytes32 marketId) public view returns (address, address) {
         return (address(markets[marketId].outCome.outcome1Token), address(markets[marketId].outCome.outcome2Token));
+    }
+
+    function getFeeConfig() public view returns (address feeManager, uint96 feeRate) {
+        return (address(uint160(feeConfig >> 96)), uint96(feeConfig));
     }
 }
