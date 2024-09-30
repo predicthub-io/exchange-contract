@@ -38,7 +38,7 @@ contract ProxyHelper is Ownable {
     /// @param _signer    - The address that managers the proxy wallet
     /// @param _proxy    - The proxy address to verify
     function checkProxyWalletAddress(address _signer, address _proxy) public view returns (bool) {
-        return IPredictHubProxyWalletFactory(proxyFactory).checkProxyWalletAddress(_proxy, _signer);
+        return IPredictHubProxyWalletFactory(proxyFactory).checkProxyWalletAddress(_signer,_proxy);
     }
 
     /// @notice Gets the PredictHub Gnosis Safe address for an address
