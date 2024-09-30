@@ -50,8 +50,7 @@ abstract contract AssetOperations is IAssetOperations, IAssets {
     }
 
     function _approveBatch(address user, bytes32 marketId, uint256 tokenId, uint256 amount) internal override {
-        address factory = getFactory();
-        if (IERC20Ext(address(uint160(tokenId))).allowance(user, factory) < amount) {
+        if (IERC20Ext(address(uint160(tokenId))).allowance(user, address(this)) < amount) {
             IConditionalTokens(factory).approveBatch(user, marketId);
         }
     }
