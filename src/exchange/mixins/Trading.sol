@@ -143,7 +143,7 @@ abstract contract Trading is IFees, ITrading, IHashing, IRegistry, ISignatures, 
         (uint256 taking, bytes32 orderHash) = _performOrderChecks(takerOrder, making);
         (uint256 makerAssetId, uint256 takerAssetId) = _deriveAssetIds(takerOrder);
 
-        _safeApproveConditionalToken(takerOrder.maker, makerAssetId, making, takerOrder.signatureType);
+        _safeApproveConditionalToken(takerOrder.maker, makerAssetId, making);
         // Transfer takerOrder making amount from taker order to the Exchange
         _transfer(takerOrder.maker, address(this), makerAssetId, making);
 
@@ -210,7 +210,7 @@ abstract contract Trading is IFees, ITrading, IHashing, IRegistry, ISignatures, 
             makerOrder.side
         );
         (uint256 makerAssetId, uint256 takerAssetId) = _deriveAssetIds(makerOrder);
-        _safeApproveConditionalToken(makerOrder.maker, makerAssetId, making, makerOrder.signatureType);
+        _safeApproveConditionalToken(makerOrder.maker, makerAssetId, making);
         _fillFacingExchange(making, taking, makerOrder.maker, makerAssetId, takerAssetId, matchType, fee);
 
         emit OrderFilled(
@@ -390,8 +390,7 @@ abstract contract Trading is IFees, ITrading, IHashing, IRegistry, ISignatures, 
     function _safeApproveConditionalToken(
         address user,
         uint256 tokenId,
-        uint256 amount,
-        SignatureType signatureType
+        uint256 amount
     ) internal {
         if (tokenId > 0) {
             bytes32 marketId = getMarketId(tokenId);
